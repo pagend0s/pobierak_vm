@@ -264,6 +264,7 @@ fi
 cp $plik_zr $dest
 sudo sed -i.bak '/pobierak/d' ~/.bashrc
 sudo echo "alias pobierak='/home/$user_comp/SKRYPTY/pobierak.sh'" >> ~/.bashrc
+chmod +x "/home/$user_comp/SKRYPTY/pobierak.sh"
 echo -e "OD TERAZ MOZESZ UZYC KOMENDY ${RED}${u}pobierak${NC} BASH BEZPOSREDIO W TERMINALU"
 sleep 5
 exec bash
