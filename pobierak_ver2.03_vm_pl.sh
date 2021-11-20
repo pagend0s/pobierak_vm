@@ -201,8 +201,8 @@ download_channel(){
 }
 upgrade_ytdl(){
 	sudo apt install ffmpeg -y
- 	sudo apt install avconv -y
-	sudo apt-get install  libav-tools -y
+ 	#sudo apt install avconv -y
+	#sudo apt-get install  libav-tools -y
 
 }
 install_ytdl(){
