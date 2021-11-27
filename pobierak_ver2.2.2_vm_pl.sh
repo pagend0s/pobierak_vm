@@ -355,7 +355,7 @@ printMenu(){
 	echo ""
 	usb_check
 	echo ""
-    echo -e "${normal} ${u}Pobierak_ver2.2.1${NC}"
+    echo -e "${normal} ${u}Pobierak_ver2.2.2${NC}"
 	echo ""
 	echo -e	"${PURPLE}	\t1)	SCIAGNIJ ILE CHCESZ POJEDYNCZYCH LINKOW ${NC}"
     echo ""
