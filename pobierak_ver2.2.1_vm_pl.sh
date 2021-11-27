@@ -308,14 +308,6 @@ download_movie_from_file(){
 	sleep 0.5   
 	echo ""
 	echo -e "NA DYSKU USB POZOSTALO: ${RED} $space_left ${NC}"
-    #Choose quality
-    read -p "W jakiej jakosci chcesz sciagnac MP3 128K lub 320K ? Wpisz popawna wartosc: " quality_mp3
-  
-    while [ $quality_mp3 != "128K" ] && [ $quality_mp3 != "320K" ];
-    do
-        echo "WPROWADZ POPRAWNA WARTOSC 128K LUB 320K"
-        read -p "W jakiej jakosci chcesz sciagnac MP3 128K lub 320K ? Wpisz popawna wartosc: " quality_mp3
-    done
     #Reade path to file with list
     read -p "PODAJ SCIEZKE DO PLIKU Z LISTA PIOSENEK: " plik_1
     plik_string=$( echo  $plik_1 |  sed 's/"//g' |  sed s/\'//g )
@@ -362,7 +354,7 @@ printMenu(){
 	echo ""
 	usb_check
 	echo ""
-    echo -e "${normal} ${u}Pobierak_ver2.2${NC}"
+    echo -e "${normal} ${u}Pobierak_ver2.2.1${NC}"
 	echo ""
 	echo -e	"${PURPLE}	\t1)	SCIAGNIJ ILE CHCESZ POJEDYNCZYCH LINKOW ${NC}"
     echo ""
