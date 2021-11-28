@@ -244,7 +244,8 @@ while [ 1 ];
         fi
         for site_mov in ${mov_list[@]}
          do
-          youtube-dl --ignore-errors -f bestvideo+bestaudio/best --output "%(title)s.%(ext)s"  "$site_mov"
+          #youtube-dl --ignore-errors -f bestvideo+bestaudio/best --output "%(title)s.%(ext)s"  "$site_mov"
+	  youtube-dl  --external-downloader ffmpeg --external-downloader-args "-v quiet -stats " --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$site_mov"
         done
 
 }
