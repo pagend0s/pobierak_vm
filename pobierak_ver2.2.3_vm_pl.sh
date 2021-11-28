@@ -283,7 +283,7 @@ download_movie_and_music_from_file(){
     for s in $( cat $plik_string )  ;
     do
         youtube-dl --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality $quality_mp3 --output $mkdir_on_usb/"%(title)s.%(ext)s" "$s"
-        youtube-dl --ignore-errors -f bestvideo+bestaudio/best --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
+        youtube-dl  --external-downloader ffmpeg --external-downloader-args "-v quiet -stats " --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
         
     done
 
@@ -316,9 +316,7 @@ download_movie_from_file(){
     #Main download loop
     for s in $( cat $plik_string )  ;
     do
-     #youtube-dl  --external-downloader aria2c --external-downloader-args '-c -j 3 -x 16 -s 16' --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
      youtube-dl  --external-downloader ffmpeg --external-downloader-args "-v quiet -stats " --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
-        
     done
 
 
