@@ -316,7 +316,8 @@ download_movie_from_file(){
     #Main download loop
     for s in $( cat $plik_string )  ;
     do
-        youtube-dl --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
+     #youtube-dl  --external-downloader aria2c --external-downloader-args '-c -j 3 -x 16 -s 16' --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
+     youtube-dl  --external-downloader ffmpeg --external-downloader-args "-v quiet -stats " --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
         
     done
 
@@ -355,7 +356,7 @@ printMenu(){
 	echo ""
 	usb_check
 	echo ""
-    echo -e "${normal} ${u}Pobierak_ver2.2.2${NC}"
+    echo -e "${normal} ${u}Pobierak_ver2.2.3${NC}"
 	echo ""
 	echo -e	"${PURPLE}	\t1)	SCIAGNIJ ILE CHCESZ POJEDYNCZYCH LINKOW ${NC}"
     echo ""
