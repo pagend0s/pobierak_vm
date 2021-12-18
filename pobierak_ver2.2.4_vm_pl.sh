@@ -35,8 +35,7 @@ GREEN='\033[1;32m'
 #${CYAN}
 youtube_dl_update(){
 
-	sudo youtube-dl -Uusb_mount2="$(lsblk | grep /media | grep -oP "sd[a-z][0-9]?" | awk '{print "/dev/"$1}')"
-    usb_media2="$(awk -v needle=$usb_mount2 '$1==needle {print $2}' /proc/mounts)"
+	sudo youtube-dl -U
 }
 
 download_from_list(){
@@ -71,7 +70,7 @@ download_from_list(){
     #Main download loop
     for s in $( cat $plik_string )  ;
     do
-        youtube-dl --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality $quality_mp3 --output $mkdir_on_usb/"%(title)s.%(ext)s" "$s"
+        youtube-dl  --external-downloader ffmpeg --external-downloader-args "-v quiet -stats " --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality $quality_mp3 --output $mkdir_on_usb/"%(title)s.%(ext)s" "$s"
     done
       
 
@@ -120,7 +119,7 @@ download_song(){
     #Main download loop
 	for site in ${mp3_list[@]}
 	 do
-	  youtube-dl --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality "$quality_mp3" --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$site"
+	  youtube-dl --external-downloader ffmpeg --external-downloader-args "-v quiet -stats " --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality "$quality_mp3" --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$site"
 	done
 }
 
@@ -158,7 +157,7 @@ download_playlist(){
     echo ""
     echo -e " ${PURPLE} MP3 file is saved under: $mkdir_on_usb  ${NC} "
     echo ""
-    youtube-dl --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality $quality_mp3 --yes-playlist  --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$playlist_id"
+    youtube-dl --external-downloader ffmpeg --external-downloader-args "-v quiet -stats " --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality $quality_mp3 --yes-playlist  --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$playlist_id"
 		
 }
 
@@ -196,7 +195,7 @@ download_channel(){
     echo ""
     echo -e " ${PURPLE} MP3 file is saved under: $mkdir_on_usb_2  ${NC} "
     echo ""
-    youtube-dl -f best -ciw --extract-audio --audio-format mp3 --audio-quality $quality_mp3 -o  $mkdir_on_usb_2/"%(title)s.%(ext)s" -v "$channel_id"
+    youtube-dl --external-downloader ffmpeg --external-downloader-args "-v quiet -stats " -f best -ciw --extract-audio --audio-format mp3 --audio-quality $quality_mp3 -o  $mkdir_on_usb_2/"%(title)s.%(ext)s" -v "$channel_id"
 	
 
 }
@@ -209,7 +208,7 @@ upgrade_ytdl(){
 install_ytdl(){
 	sudo curl -L https://yt-dl.org/downloads/latest/youtube-dl -o /usr/local/bin/youtube-dl
 	sudo chmod a+rx /usr/local/bin/youtube-dl
-    sudo apt-get install python-is-python3
+    	sudo apt-get install python-is-python3
 }
 install_tor(){
 
