@@ -15,5 +15,5 @@ sudo make altinstall
 
 #sudo echo "alias python='/usr/local/bin/python3.9'" >> ~/.bashrc
 
-#sudo update-alternatives --isntall /usr/bin/python python /usr/local/bin/python3.9 1
-sudo update-alternatives --isntall /usr/bin/python3 python /usr/local/bin/python3.9 1
+#sudo update-alternatives --install /usr/bin/python python /usr/local/bin/python3.9 1
+sudo update-alternatives --install /usr/bin/python3 python /usr/local/bin/python3.9 1
