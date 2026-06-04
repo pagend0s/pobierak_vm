@@ -37,6 +37,5 @@ Currently planned/supported language files:
 
 The default language is stored in:
 
-```text
 resources/lang/default_lang
-``
+
