@@ -3,4 +3,5 @@
 - Added yt-dlp update check.
 - Added internet connection check.
 - Added changelog dialog.
+- Extended the update function to cover all files in the repository
 - And more
