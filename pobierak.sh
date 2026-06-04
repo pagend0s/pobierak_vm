@@ -26,7 +26,7 @@ YELLOW='\033[1;33m'
 SCRIPT_FILE="$(readlink -f "$0")"
 SCRIPT_PATH="$(dirname "$SCRIPT_FILE")"
 
-Pobierak_ver="5.2"
+Pobierak_ver="5.3"
 user_comp="$( whoami  )"
 usb_mount="$(lsblk | grep /media | grep -oP "sd[a-z][0-9]?" | awk '{print "/dev/"$1}')"
 usb_media="$(awk -v needle=$usb_mount '$1==needle {print $2}' /proc/mounts)"
@@ -114,20 +114,34 @@ set_default_language() {
 check_pobierak_update() {
     local repo_raw_script="https://raw.githubusercontent.com/pagend0s/pobierak_vm/main/pobierak.sh"
     local repo_raw_changelog="https://raw.githubusercontent.com/pagend0s/pobierak_vm/main/resources/chg_log"
+    local repo_archive="https://github.com/pagend0s/pobierak_vm/archive/refs/heads/main.tar.gz"
 
     local current_script="$SCRIPT_FILE"
     local local_changelog="$SCRIPT_PATH/resources/chg_log"
 
-    local tmp_script=""
+    local tmp_dir=""
+    local tmp_archive=""
     local tmp_changelog=""
+    local tmp_config_dir=""
+    local extracted_dir=""
+
     local local_ver=""
     local remote_ver=""
     local changelog_text=""
     local msg=""
+    local backup_dir=""
 
     if ! command -v curl >/dev/null 2>&1; then
         dialog --title "$(translate pob_update_title)" \
             --msgbox "$(translate pob_update_curl_missing)" \
+            8 60
+        clear
+        return 1
+    fi
+
+    if ! command -v tar >/dev/null 2>&1; then
+        dialog --title "$(translate pob_update_title)" \
+            --msgbox "tar is not installed.\n\nCannot update Pobierak." \
             8 60
         clear
         return 1
@@ -203,44 +217,113 @@ check_pobierak_update() {
         return 0
     fi
 
-    tmp_script="$(mktemp)"
+    tmp_dir="$(mktemp -d)"
+    tmp_archive="$tmp_dir/pobierak.tar.gz"
+    tmp_config_dir="$tmp_dir/local_config"
 
-    if ! curl -fsSL "$repo_raw_script" -o "$tmp_script"; then
+    mkdir -p "$tmp_config_dir"
+
+    # Save local user config before update
+    mkdir -p "$tmp_config_dir/resources/lang"
+    mkdir -p "$tmp_config_dir/resources"
+
+    [[ -f "$SCRIPT_PATH/resources/lang/default_lang" ]] && \
+        cp "$SCRIPT_PATH/resources/lang/default_lang" "$tmp_config_dir/resources/lang/default_lang"
+
+    [[ -f "$SCRIPT_PATH/resources/warnings" ]] && \
+        cp "$SCRIPT_PATH/resources/warnings" "$tmp_config_dir/resources/warnings"
+
+    [[ -f "$SCRIPT_PATH/resources/first_run" ]] && \
+        cp "$SCRIPT_PATH/resources/first_run" "$tmp_config_dir/resources/first_run"
+
+    # Download full repository archive
+    if ! curl -fsSL "$repo_archive" -o "$tmp_archive"; then
         dialog --title "$(translate pob_update_title)" \
             --msgbox "$(translate pob_update_download_failed)" \
             8 60
 
-        rm -f "$tmp_script" "$tmp_changelog"
+        rm -rf "$tmp_dir"
+        rm -f "$tmp_changelog"
         clear
         return 1
     fi
 
-    chmod +x "$tmp_script"
+    # Extract archive
+    if ! tar -xzf "$tmp_archive" -C "$tmp_dir"; then
+        dialog --title "$(translate pob_update_title)" \
+            --msgbox "Cannot extract update archive.\n\nPobierak was not updated." \
+            8 60
 
-    # Backup current script
-    cp "$current_script" "$current_script.bak"
-
-    # Replace current script
-    mv "$tmp_script" "$current_script"
-    chmod +x "$current_script"
-
-    # Update local changelog file too
-    if [[ -s "$tmp_changelog" ]]; then
-        mkdir -p "$SCRIPT_PATH/resources"
-        cp "$tmp_changelog" "$local_changelog"
+        rm -rf "$tmp_dir"
+        rm -f "$tmp_changelog"
+        clear
+        return 1
     fi
 
+    extracted_dir="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -name "pobierak_vm-*" | head -n 1)"
+
+    if [[ -z "$extracted_dir" || ! -d "$extracted_dir" ]]; then
+        dialog --title "$(translate pob_update_title)" \
+            --msgbox "Cannot find extracted Pobierak files.\n\nPobierak was not updated." \
+            8 60
+
+        rm -rf "$tmp_dir"
+        rm -f "$tmp_changelog"
+        clear
+        return 1
+    fi
+
+    # Backup whole current directory
+    backup_dir="${SCRIPT_PATH}.bak_${local_ver}_$(date +%Y%m%d_%H%M%S)"
+
+    if ! cp -a "$SCRIPT_PATH" "$backup_dir"; then
+        dialog --title "$(translate pob_update_title)" \
+            --msgbox "Cannot create backup.\n\nPobierak was not updated." \
+            8 60
+
+        rm -rf "$tmp_dir"
+        rm -f "$tmp_changelog"
+        clear
+        return 1
+    fi
+
+    # Replace/update all project files from GitHub
+    cp -a "$extracted_dir/." "$SCRIPT_PATH/"
+
+    # Restore local user config
+    [[ -f "$tmp_config_dir/resources/lang/default_lang" ]] && {
+        mkdir -p "$SCRIPT_PATH/resources/lang"
+        cp "$tmp_config_dir/resources/lang/default_lang" "$SCRIPT_PATH/resources/lang/default_lang"
+    }
+
+    [[ -f "$tmp_config_dir/resources/warnings" ]] && {
+        mkdir -p "$SCRIPT_PATH/resources"
+        cp "$tmp_config_dir/resources/warnings" "$SCRIPT_PATH/resources/warnings"
+    }
+
+    [[ -f "$tmp_config_dir/resources/first_run" ]] && {
+        mkdir -p "$SCRIPT_PATH/resources"
+        cp "$tmp_config_dir/resources/first_run" "$SCRIPT_PATH/resources/first_run"
+    }
+
+    # Make main script executable
+    if [[ -f "$current_script" ]]; then
+        chmod +x "$current_script"
+    fi
+
+    rm -rf "$tmp_dir"
     rm -f "$tmp_changelog"
 
-    msg="$(printf "%s\n\n%s: %s\n%s: %s\n\n%s" \
+    msg="$(printf "%s\n\n%s: %s\n%s: %s\n\nBackup:\n%s\n\n%s" \
         "$(translate pob_update_done)" \
         "$(translate pob_update_old)" "$local_ver" \
         "$(translate pob_update_new)" "$remote_ver" \
+        "$backup_dir" \
         "$(translate pob_update_restart)")"
 
     dialog --title "$(translate pob_update_title)" \
         --msgbox "$msg" \
-        11 65
+        13 75
 
     clear
     exec bash "$current_script" "$@"
