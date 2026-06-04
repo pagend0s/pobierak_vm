@@ -23,20 +23,271 @@ YELLOW='\033[1;33m'
 #${CYAN}
 #${YELLOW}
 
-Pobierak_ver="Pobierak_ver 4.6 MultiLang"
+SCRIPT_FILE="$(readlink -f "$0")"
+SCRIPT_PATH="$(dirname "$SCRIPT_FILE")"
+
+Pobierak_ver="5.2"
 user_comp="$( whoami  )"
 usb_mount="$(lsblk | grep /media | grep -oP "sd[a-z][0-9]?" | awk '{print "/dev/"$1}')"
 usb_media="$(awk -v needle=$usb_mount '$1==needle {print $2}' /proc/mounts)"
-var_locale="$( cat /etc/default/locale | grep "pl" )"
+###var_locale="$( cat /etc/default/locale | grep "pl" )"
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+unset error_LVL
 
-#CHECK LANGUAGE
-if [ -z $var_locale ]
-    then
-        language="english"
+
+SCRIPT_FILE="$(readlink -f "$0")"
+chmod +x $SCRIPT_FILE
+
+DEFAULT_LANG_FILE="$SCRIPT_PATH/resources/lang/default_lang"
+
+LANGUAGE="$(cat "$DEFAULT_LANG_FILE")"
+
+#Default language
+LANGUAGE="${1:-$LANGUAGE}"
+
+# Language file path
+LANG_FILE="$SCRIPT_PATH/resources/lang/${LANGUAGE}.sh"
+error_LVL=$(cat $SCRIPT_PATH/resources/warnings)
+source "$LANG_FILE"
+
+
+translate() {
+    local key="$1"
+    echo "${TEXT[$key]}"
+}
+
+
+check_internet_connection() {
+    if curl -fsI --connect-timeout 5 --max-time 8 https://github.com >/dev/null 2>&1 || \
+       curl -fsI --connect-timeout 5 --max-time 8 https://www.google.com >/dev/null 2>&1; then
+
+        echo "$(translate internet_on)"
+        return 0
+
     else
-        language="polish"
+        if command -v dialog >/dev/null 2>&1; then
+            local msg
+            msg="$(printf "%s\n\n%s" "$(translate internet_off)" "$(translate internet_check)")"
+
+            dialog --title "$(translate internet_title)" \
+                --msgbox "$msg" \
+                8 55
+
+            clear
+        else
+            echo "$(translate internet_off)"
+        fi
+
+        return 1
     fi
-#CHECK IF USB IS MOUNTED WHEN NOT GLOBAL DEVICE TO DOWNLOAD IS LOCAL DISK
+}
+
+
+set_default_language() {
+    local lang_file="$SCRIPT_PATH/resources/lang/default_lang"
+    local selected_lang=""
+
+    mkdir -p "$(dirname "$lang_file")"
+
+    selected_lang=$(dialog \
+        --clear \
+        --title "Default language" \
+        --menu "In which language should POBIERAK be started by default?" \
+        15 60 4 \
+        "en" "English" \
+        "de" "German" \
+        "pl" "Polish" \
+        "tr" "Turkish" \
+        3>&1 1>&2 2>&3)
+
+    if [[ -n "$selected_lang" ]]; then
+        echo "$selected_lang" > "$lang_file"
+        dialog --title "Language saved" \
+            --msgbox "Selected default language: $selected_lang" \
+            7 45
+    fi
+
+    clear
+    exec "$SCRIPT_FILE" "$@"
+}
+
+check_pobierak_update() {
+    local repo_raw_script="https://raw.githubusercontent.com/pagend0s/pobierak_vm/main/pobierak.sh"
+    local repo_raw_changelog="https://raw.githubusercontent.com/pagend0s/pobierak_vm/main/resources/chg_log"
+
+    local current_script="$SCRIPT_FILE"
+    local local_changelog="$SCRIPT_PATH/resources/chg_log"
+
+    local tmp_script=""
+    local tmp_changelog=""
+    local local_ver=""
+    local remote_ver=""
+    local changelog_text=""
+    local msg=""
+
+    if ! command -v curl >/dev/null 2>&1; then
+        dialog --title "$(translate pob_update_title)" \
+            --msgbox "$(translate pob_update_curl_missing)" \
+            8 60
+        clear
+        return 1
+    fi
+
+    # Local version
+    if [[ -n "${Pobierak_ver:-}" ]]; then
+        local_ver="$Pobierak_ver"
+    else
+        local_ver="$(
+            grep -m1 -E '^[[:space:]]*Pobierak_ver=' "$current_script" \
+            | sed -E 's/^[^=]+=//; s/"//g; s/'\''//g; s/[[:space:]]//g'
+        )"
+    fi
+
+    [[ -z "$local_ver" ]] && local_ver="unknown"
+
+    # Remote version from GitHub pobierak.sh
+    remote_ver="$(
+        curl -fsSL "$repo_raw_script" \
+        | grep -m1 -E '^[[:space:]]*Pobierak_ver=' \
+        | sed -E 's/^[^=]+=//; s/"//g; s/'\''//g; s/[[:space:]]//g'
+    )"
+
+    if [[ -z "$remote_ver" ]]; then
+        dialog --title "$(translate pob_update_title)" \
+            --msgbox "$(translate pob_update_remote_error)" \
+            8 60
+        clear
+        return 1
+    fi
+
+    # Same version
+    if [[ "$local_ver" == "$remote_ver" ]]; then
+        echo "$(translate pob_update_current): $local_ver"
+        return 0
+    fi
+
+    # Version compare
+    if [[ "$local_ver" != "unknown" ]]; then
+        if [[ "$(printf "%s\n%s\n" "$local_ver" "$remote_ver" | sort -V | tail -n1)" != "$remote_ver" ]]; then
+            echo "$(translate pob_update_current): $local_ver"
+            return 0
+        fi
+    fi
+
+    # Changelog: first try remote, then local file
+    tmp_changelog="$(mktemp)"
+
+    if curl -fsSL "$repo_raw_changelog" -o "$tmp_changelog"; then
+        changelog_text="$(cat "$tmp_changelog")"
+    elif [[ -f "$local_changelog" ]]; then
+        changelog_text="$(cat "$local_changelog")"
+    else
+        changelog_text="$(translate pob_update_no_changelog)"
+    fi
+
+    msg="$(printf "%s\n\n%s: %s\n%s: %s\n\n%s:\n%s\n\n%s" \
+        "$(translate pob_update_available)" \
+        "$(translate pob_update_installed)" "$local_ver" \
+        "$(translate pob_update_latest)" "$remote_ver" \
+        "$(translate pob_update_changelog)" "$changelog_text" \
+        "$(translate pob_update_question)")"
+
+    dialog --title "$(translate pob_update_title)" \
+        --yesno "$msg" \
+        22 85
+
+    if [[ $? -ne 0 ]]; then
+        rm -f "$tmp_changelog"
+        clear
+        echo "$(translate pob_update_skipped)"
+        return 0
+    fi
+
+    tmp_script="$(mktemp)"
+
+    if ! curl -fsSL "$repo_raw_script" -o "$tmp_script"; then
+        dialog --title "$(translate pob_update_title)" \
+            --msgbox "$(translate pob_update_download_failed)" \
+            8 60
+
+        rm -f "$tmp_script" "$tmp_changelog"
+        clear
+        return 1
+    fi
+
+    chmod +x "$tmp_script"
+
+    # Backup current script
+    cp "$current_script" "$current_script.bak"
+
+    # Replace current script
+    mv "$tmp_script" "$current_script"
+    chmod +x "$current_script"
+
+    # Update local changelog file too
+    if [[ -s "$tmp_changelog" ]]; then
+        mkdir -p "$SCRIPT_PATH/resources"
+        cp "$tmp_changelog" "$local_changelog"
+    fi
+
+    rm -f "$tmp_changelog"
+
+    msg="$(printf "%s\n\n%s: %s\n%s: %s\n\n%s" \
+        "$(translate pob_update_done)" \
+        "$(translate pob_update_old)" "$local_ver" \
+        "$(translate pob_update_new)" "$remote_ver" \
+        "$(translate pob_update_restart)")"
+
+    dialog --title "$(translate pob_update_title)" \
+        --msgbox "$msg" \
+        11 65
+
+    clear
+    exec bash "$current_script" "$@"
+}
+
+check_pobierak_update
+
+check_yt_dlp_version(){
+    REPO="yt-dlp/yt-dlp"
+    # Aktualna wersja lokalna
+    if command -v yt-dlp >/dev/null 2>&1; then
+        LOCAL_VERSION="$(yt-dlp --version 2>/dev/null || true)"
+        LOCAL_PATH="$(command -v yt-dlp)"
+    else
+        LOCAL_VERSION=""
+        LOCAL_PATH=""
+    fi
+
+    # Najnowsza wersja z GitHub API
+    LATEST_VERSION="$(
+        curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+        | grep '"tag_name":' \
+        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
+    )"
+
+    if [[ "$LOCAL_VERSION" == "$LATEST_VERSION" ]]; then
+            echo "$(translate 4_if_latest)"
+        else
+            msg="$(printf "%s\n\n%s" "$(translate 1_ytdlp_update)" "$(translate 2_ytdlp_update)")"
+            dialog --title "YT-DLP update" \
+                --msgbox "$msg" \
+                10 60
+        
+    fi
+    clear
+}
+
+if [ $error_LVL == 0 ];
+    then
+        ytdlp_err=(--no-warnings  --ignore-errors)
+        err_state="$(translate 2_ERR_LVL)"
+    else
+        ytdlp_err=()
+        err_state="$(translate 3_ERR_LVL)"
+fi
+
+
 if [ -z "$usb_media" ];
     then
         usb_mount="/home"
@@ -63,6 +314,22 @@ usb_LABEL_TEST(){
     fi
 }
 
+ERROR_LVL(){
+    read -p "$(translate 1_ERR_LVL)" err_lvl
+
+    while [[ "$err_lvl" != "YES" && "$err_lvl" != "NO" ]]; do
+        read -p "$(translate 1_ERR_LVL)" err_lvl
+    done
+
+    if [ "$err_lvl" == "YES" ];
+        then
+        echo 1 > "$SCRIPT_PATH/resources/warnings"
+        else
+        echo 0 > "$SCRIPT_PATH/resources/warnings"
+    fi
+    exec "$SCRIPT_FILE" "$@"
+}
+
 #FUNCTION PRINTING INFORMATION IF DISK IS MOUNTED OR NOT AND IF THERE IS SPACEBAR IN LABEL OF THE USB WHEN ATATCHED
 usb_check(){
 
@@ -70,173 +337,50 @@ space_left_1="$( df -PH "$usb_media" 2>/dev/null | tail -1 | awk '{print $4}' )"
 var_usb_label_space=$( usb_LABEL_TEST )
 
 	if [ "$usb_var" == 0 ] ;
-        	then
-                    if [ $language == "polish" ] ;
-                        then
-            		        echo -e "${RED}${bold} !!!! ZEWNETRZNY USB NIE JEST ZAMONTOWANY W SYSTEMIE :((( !!!! ${normal}${NC}"
-           	 	            echo -e "${GREEN}${bold} DOCELOWY FOLDER ZAPISU TO $usb_media ;) ${normal}${NC}, ${RED} Pozostale miejsce: $space_left_1 ${NC}"
-        	            else
-                            echo -e "${RED}${bold} !!!! EXTERNAL USB IS NOT INCLUDED IN THE SYSTEM :((( !!!! ${normal}${NC}"
-           	                echo -e "${GREEN}${bold} TARGET DIRECTORY FOR DOWNLOAD IS $usb_media ;) ${normal}${NC}, ${RED} FREE SPACE LEFT ON THE DEVICE: $space_left_1 ${NC}"
-                        fi
-            else
-                    if [ "$var_usb_label_space" == 1 ] ;
-                        then
-                            if [ $language == "polish" ] ;
-                                then
-                                    usb_media="$(eval echo ~$USER)"
-                                    space_left_1="$( df -PH "$usb_media" 2>/dev/null | tail -1 | awk '{print $4}' )"
-                                    echo -e "${RED}${bold} NAZWA USB ZAWIERA SPACJE !!!. DOCELOWE MIEJSCE ZAPISU TO:${BLUE} $usb_media (DYSK LOKALNY) . Pozostale miejsce: $space_left_1 ${NC}"
-                                    echo -e "${RED}${bold} JESLI CHCESZ UZYWAC USB JAKO MIEJSCE ZAPISU ZMIEN JEGO NAZWE NA BEZ SPACJI ! ${NC}"
-                                else
-                                    usb_media="$(eval echo ~$USER)"
-                                    space_left_1="$( df -PH "$usb_media" 2>/dev/null | tail -1 | awk '{print $4}' )"
-                                    echo -e "${RED}${bold} USB NAME CONTAINS SPACES. THE TARGET DIRECTORY IS CHANGED TO:${BLUE} $usb_media (LOCAL DRIVE). FREE SPACE LEFT ON THE DEVICE: $space_left_1 ${NC}"
-                                    echo -e "${RED}${bold} IF YOU WANT TO USE YOUR USB YOU HAVE TO CHANGE THE LABEL TO WITHOUT SPACEBAR ! ${NC}"
-                            fi
-                        else
-                            if [ $language == "polish" ] ;
-                                then
-            		                echo -e "${GREEN}${bold} ZEWNETRZNY USB JEST PRAWIDLOWO ZAMONTOWANY W SYSTEMIE ;). ${RED} Pozostale miejsce to: $space_left_1 ${NC} "
-                                else
-                                    echo -e "${GREEN}${bold} THE EXTERNAL USB IS PROPERLY MOUNTED IN THE SYSTEM ;). ${RED} FREE SPACE LEFT ON THE DEVICE: $space_left_1 ${NC} "
-                            
-                            fi
-                    fi
-
-      	fi
+        then
+            echo -e "${RED}${bold} $(translate 1_usb_inf) ${normal}${NC}"
+            echo -e "${GREEN}${bold} $(translate 2_usb_inf) $usb_media ;) ${normal}${NC}, ${RED} $(translate 3_usb_inf) $space_left_1 ${NC}"
+        else
+            if [ "$var_usb_label_space" == 1 ] ;
+                then
+                    usb_media="$(eval echo ~$USER)"
+                    space_left_1="$( df -PH "$usb_media" 2>/dev/null | tail -1 | awk '{print $4}' )"
+                    echo -e "${RED}${bold} $(translate 4_usb_inf)${BLUE} $usb_media $(translate 5_usb_inf) $space_left_1 ${NC}"
+                    echo -e "${RED}${bold} $(translate 6_usb_inf) ${NC}"         
+                else
+            		echo -e "${GREEN}${bold} $(translate 7_usb_inf) ${RED} $(translate 3_usb_inf) $space_left_1 ${NC}"
+            fi
+    fi
 }
 
-download_from_list(){
-    #Create var with mounting USB mounting points
+########################################################################
+target_folder() {
+    sleep 0.5
+
+    read -p "$(translate 1_set_dir): " dir
+
+    dir="${dir// /_}"
+
+    mkdir_on_usb="$usb_media/$dir"
+
+    mkdir -p "$mkdir_on_usb"
+
+    space_left="$(df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}')"
+
+    sleep 0.5
     echo ""
-	sleep 0.5
-    #Set directory for downloaded files
-    if [ $language == "polish" ] ;
-        then
-            read -p "PODAJ NAZWE FOLDERU W KTORYM MAJA BYC ZACHOWANE KAWALKI Z LISTY Z PLIKU: " dir
-        else
-            read -p "ENTER THE NAME OF THE FOLDER IN WHICH THE SONGS FROM THE FILE LIST SHOULD BE SAVED: " dir
-    fi
     
-    #CHECK IF DIR VAR HAVE SPACEBAR IN STRING
-    if [ "$dir" != "${dir% *}" ] ; 
-    then
-        dir="${dir// /_}" ;
-    else
-        echo ""
-    fi
-                        
-    mkdir_on_usb="$( echo $usb_media/$dir   )"
-    #Make diroctory on USB accessible for all
-	mkdir $mkdir_on_usb
-    #chown -R  777 $mkdir_on_usb
-    #Measure space left on USB
-	space_left="$( df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}' )" 
-	sleep 0.5   
-	echo ""
-    if [ $language == "polish" ] ;
-        then
-	        echo -e "NA DYSKU POZOSTALO: ${RED} $space_left ${NC}"
-        else
-            echo -e "THE AMOUNT OF FREE SPACE ON THE DISK: ${RED} $space_left ${NC}"
-    fi
-    #Choose quality
-    sleep 0.5
-	echo ""
-    if [ $language == "polish" ] ;
-        then
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-    fi
-
-    while [ $quality_mp3 != "128K" ] && [ $quality_mp3 != "320K" ];
-    do
-        if [ $language == "polish" ] ;
-        then
-            echo "WPROWADZ POPRAWNA WARTOSC 128K LUB 320K"
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            echo "THE CORRECT VALUE IS: 128K OR 320K"
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-        fi
-    done
-    #Reade path to file with list
-    sleep 0.5
-	echo ""
-    if [ $language == "polish" ] ;
-        then
-            read -p "PRZECIAGNIJ I UPUSC PLIK Z LISTA DO TERMINALU: " plik_1
-        else
-            read -p "DRAG AND DROP THE FILE WITH LIST TO TERMINAL: " plik_1
-    fi
-    plik_string=$( echo  $plik_1 |  sed 's/"//g' |  sed s/\'//g )
-    sleep 0.5
-    xdg-open $mkdir_on_usb
-    #Main download loop
-    for s in $( cat $plik_string )  ;
-    do
-        yt-dlp --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality $quality_mp3 --output $mkdir_on_usb/"%(title)s.%(ext)s" "$s"
-    done
-
-
 }
 
-
-download_song(){
-
-    #Create var with mounting USB mounting points
-	sleep 0.5
-    #Set directory for downloaded files
-    if [ $language == "polish" ] ;
-        then
-            read -p "PODAJ NAZWE FOLDERU W KTORYM MAJA BYC ZACHOWANE POJEDYNCZE KAWALKI: " dir
-        else
-            read -p "ENTER THE NAME OF THE FOLDER IN WHICH THE SONGS SHOULD BE SAVED: " dir
-    fi
-    
-    #CHECK IF DIR VAR HAVE SPACEBAR IN STRING
-    if [ "$dir" != "${dir% *}" ] ; 
-    then
-        dir="${dir// /_}" ;
-    else
-        echo ""
-    fi
-    
-    mkdir_on_usb="$( echo $usb_media/$dir   )"
-
-    #Make diroctory on USB accessible for all
-	mkdir   $mkdir_on_usb
-
-    #Measure space left on USB
-	space_left="$( df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}')"
-	sleep 0.5
-	echo ""
-    
-    if [ $language == "polish" ] ;
-        then
-	        echo -e "NA DYSKU POZOSTALO: ${RED} $space_left ${NC}"
-        else
-            echo -e "THE AMOUNT OF FREE SPACE ON THE DISK: ${RED} $space_left ${NC}"
-    fi
-        
-    #Create list with urls
-    touch /tmp/site.txt
-	while [ 1 ];
+set_single_link(){
+    while [ 1 ];
 	do
 	mp3_list=$( cat /tmp/site.txt)
     
-    if [ $language == "polish" ] ;
-        then
-	        read -p "PODAJ CALY ADRES. ABY PRZERWAC WPISZ q I ENTER: " var
-        else
-            read -p "ENTER FULL ADDRESS. TO STOP THE LOOP AND GO FURTHER WRITE q AND PRESS ENTER: " var
-    fi
+	read -p "$(translate 1_set_sing_link)" var
     
 	if [ "$var" == "q" ];
 	then
-	 rm   /tmp/site.txt
 	 break;
 	else
 	 echo "$var" >> /tmp/site.txt
@@ -245,433 +389,271 @@ download_song(){
 	sleep 0.5
 	echo ""
 
-    if [ $language == "polish" ] ;
-        then
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-    fi
+}
 
-    while [ $quality_mp3 != "128K" ] && [ $quality_mp3 != "320K" ];
-    do
-        if [ $language == "polish" ] ;
-        then
-            echo "WPROWADZ POPRAWNA WARTOSC 128K LUB 320K"
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            echo "THE CORRECT VALUE IS: 128K OR 320K"
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-        fi
+set_mp3_quality() {
+    read -p "$(translate 1_set_song_quality)" quality_mp3
+
+    while [[ "$quality_mp3" != "128K" && "$quality_mp3" != "320K" ]]; do
+        echo "$(translate 2_set_song_quality)"
+        read -p "$(translate 3_set_song_quality)" quality_mp3
     done
+}
 
-    xdg-open $mkdir_on_usb
+space_left_dir(){
+    space_left="$( df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}' )" 
+	sleep 0.5   
+	echo ""
+    echo -e "$(translate 3_usb_inf) ${RED} $space_left ${NC}"
+}
+########################################################################
+
+download_song(){
+    # Create target dir
+    target_folder
+
+    # Create list with urls
+    touch /tmp/site.txt
+    set_single_link
+
+    mapfile -t mp3_list < /tmp/site.txt
+    rm /tmp/site.txt
+
+    space_left_dir
+
+    # Set quality
+    set_mp3_quality
+    
+    # Main download loop
+    echo -e "${YELLOW}${u}$(translate 1_info)${NC}"
+    
+    for site in "${mp3_list[@]}"; do
+        yt-dlp "${ytdlp_err[@]}" \
+            --format bestaudio \
+            --extract-audio \
+            --audio-format mp3 \
+            --audio-quality "$quality_mp3" \
+            --output "$mkdir_on_usb/%(title)s.%(ext)s" \
+            "$site"
+    done
+    setsid xdg-open $mkdir_on_usb >/dev/null 2>&1 &
+}
+
+download_from_list(){
+    #Create var with mounting USB mounting points
+    echo ""
+	sleep 0.5
+    # Create target dir
+    target_folder
+
+    space_left_dir
+    
+    # Set quality
+    set_mp3_quality
+    #Reade path to file with list
+    sleep 0.5
+	echo ""
+
+    read -p "$(translate 1_drag_drop) " file_1
+
+    file_path=$( echo  $file_1 |  sed 's/"//g' |  sed s/\'//g )
+    sleep 0.5
+    
+    echo -e "${YELLOW}${u}$(translate 1_info)${NC}"
     #Main download loop
-	for site in ${mp3_list[@]}
-	 do
-	  yt-dlp --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality "$quality_mp3" --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$site"
-	done
+    for s in $( cat $file_path )  ;
+    do
+        yt-dlp "${ytdlp_err[@]}" \
+            --format bestaudio \
+            --extract-audio \
+            --audio-format mp3 \
+            --audio-quality $quality_mp3 \
+            --output $mkdir_on_usb/"%(title)s.%(ext)s" \
+            "$s"
+    done
+    setsid xdg-open $mkdir_on_usb >/dev/null 2>&1 &
+
 }
 
 download_playlist(){
 	echo ""
-    if [ $language == "polish" ] ;
-        then
-	        sleep 0.5
-            echo    "W CELU SCIAGNIECIA CALEY PLYLISTY NIEZBEDNY JEST JEJ IDENTYFIKATOR"
-            sleep 0.5
-	        echo -e "IDENTYFIKATOR PLAYLISTY ZOSTAL ZAZNACZONY NA ZIELONO W PRZYKLADOWYM LINKU OBOK https://www.youtube.com/watch?v=${GREEN}PLEsNcyT1Z66QTRRPXdJZJdPoqdud4wNKP ${NC}"
- 	        sleep 0.5
-            #Read playlist ID
-            echo    ""
-	        read -p "PODAJ IDENTYFIKATOR PLAYLISTY Z ADRESU W SWOJEJ PRZEGLĄDARCE : " playlist_id
-            sleep 0.5
-	        echo ""
-            #Set directory for downloaded file
-	        read -p "PODAJ NAZWE FOLDERU W KTORYM MA BYC ZACHOWANA PLAYLISTA: " dir
-        else
-            sleep 0.5
-            echo    "IN ORDER TO FIND THE ENTIRE PLAYLIST, ITS IDENTIFIER IS NECESSARY"
-            sleep 0.5
-	        echo -e " THE PART OF THE LINK THAT INCLUDES THE ID IS GREEN IN THE EXAMPLE LINK ON THE RIGHT https://www.youtube.com/watch?v=${GREEN}PLEsNcyT1Z66QTRRPXdJZJdPoqdud4wNKP ${NC}"
- 	        sleep 0.5
-            #Read playlist ID
-            echo ""
-	        read -p "GIVE THE PLAYLIST ID FROM ADDRESS IN YOUR WEBBROWSER : " playlist_id
-            sleep 0.5
-	        echo ""
-            #Set directory for downloaded file
-	        read -p "ENTER THE NAME OF THE FOLDER IN WHICH SONGS FROM THE PLAYLIST SHOULD BE SAVED: " dir
-    fi
-            
-    
-    #CHECK IF DIR VAR HAVE SPACEBAR IN STRING
-    if [ "$dir" != "${dir% *}" ] ; 
-    then
-        dir="${dir// /_}" ;
-    else
-        echo ""
-    fi
-    
-	mkdir_on_usb="$( echo $usb_media/$dir   )"
-	mkdir $mkdir_on_usb
-
-    #Measure space left on USB
-	space_left="$( df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}')"
 	sleep 0.5
+    echo    "$(translate 1_playlist_func)"
+    sleep 0.5
+	echo -e "$(translate 2_playlist_func) https://www.youtube.com/watch?v=${GREEN}PLEsNcyT1Z66QTRRPXdJZJdPoqdud4wNKP ${NC}"
+ 	sleep 0.5
+    #Read playlist ID
+    echo    ""
+	read -p "$(translate 3_playlist_func)" playlist_id
+    sleep 0.5
 	echo ""
-    if [ $language == "polish" ] ;
-        then
-	        echo -e "NA DYSKU USB POZOSTALO: ${RED} $space_left ${NC}"
-        else
-            echo -e "THE AMOUNT OF FREE SPACE ON THE DISK: ${RED} $space_left ${NC}"
-    fi
+       
+    # Create target dir
+    target_folder
 
-    #Choose quality
+    space_left_dir
+    
+    # Set quality
+    set_mp3_quality
+    #Reade path to file with list
     sleep 0.5
 	echo ""
 
-    if [ $language == "polish" ] ;
-        then
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-    fi
+    echo -e "${YELLOW}${u}$(translate 1_info)${NC}"
 
-    while [ $quality_mp3 != "128K" ] && [ $quality_mp3 != "320K" ];
-    do
-        if [ $language == "polish" ] ;
-        then
-            echo "WPROWADZ POPRAWNA WARTOSC 128K LUB 320K"
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            echo "THE CORRECT VALUE IS: 128K OR 320K"
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-        fi
-    done
+    yt-dlp "${ytdlp_err[@]}" \
+        --format bestaudio \
+        --extract-audio \
+        --audio-format mp3 \
+        --audio-quality $quality_mp3 \
+        --yes-playlist \
+        --output $mkdir_on_usb/"%(title)s.%(ext)s" \
+        "$playlist_id"
 
-    #Main command for download playlist
-    echo ""
-    
-    if [ $language == "polish" ] ;
-        then
-            echo -e " ${PURPLE} MP3 SA ZACHOWANE POD: $mkdir_on_usb  ${NC} "
-        else
-            echo -e " ${PURPLE} MP3 file is saved under: $mkdir_on_usb  ${NC} "
-    fi
-
-    echo ""
-
-    xdg-open $mkdir_on_usb
-    yt-dlp --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality $quality_mp3 --yes-playlist  --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$playlist_id"
-
+    setsid xdg-open $mkdir_on_usb >/dev/null 2>&1 &
 }
 
 download_channel(){
 	sleep 0.5
 	echo ""
+	sleep 0.5
+    echo    "$(translate 1_channel_func)"
+    sleep 0.5
+	echo -e "$(translate 2_channel_func) ${GREEN} https://www.youtube.com/${BLUE}channel/${GREEN}UC0C1W6nV0Rv6QkvAAE_AgXg ${NC}"
+ 	sleep 0.5
+    #Read channels id
+    echo    ""
+	read -p "$(translate 3_channel_func)" channel_id
 
-if [ $language == "polish" ] ;
-        then
-	        sleep 0.5
-            echo    "W CELU SCIAGNIECIA CALEGO KANALU  NIEZBEDNY JEST LINK ZAWIERAJACY CZLON channel W LINKU"
-            sleep 0.5
-	        echo -e "PODAJ CALY LINK DO KANALU YOUTUBE np: ${GREEN} https://www.youtube.com/${BLUE}channel/${GREEN}UC0C1W6nV0Rv6QkvAAE_AgXg ${NC}"
- 	        sleep 0.5
-            #Read channels id
-            echo    ""
-	        read -p "PO PRAWEJ WKLEJ LINK Z PRZEGLADARKI ZAWIERAJACY CZLON channel W LINKU: " channel_id
-            sleep 0.5
-	        echo ""
-            #Set directory for downloaded file
-	        read -p "PODAJ NAZWE FOLDERU W KTORYM MA BYC ZACHOWANA PLAYLISTA: " dir
-        else
-            sleep 0.5
-            echo    "IN ORDER TO FIND THE ENTIRE PLAYLIST, ITS IDENTIFIER IS NECESSARY"
-            sleep 0.5
-	        echo -e "GIVE AN ENTIRE LINK TO YOUTUBE CHANNEL e.g.  ${GREEN} https://www.youtube.com/${BLUE}channel/${GREEN}UC0C1W6nV0Rv6QkvAAE_AgXg ${NC}"
- 	        sleep 0.5
-            #Read channels id
-            echo ""
-	        read -p "ON THE RIGHT PASTE LINK FROM THE BROWSER CONTAINING THE CHANNEL STRING " channel_id
-            sleep 0.5
-	        echo ""
-            #Set directory for downloaded file
-	        read -p "ENTER THE NAME OF THE FOLDER IN WHICH SONGS FROM THE WHOLE CHANNEL SHOULD BE SAVED: " dir
-    fi
+    # Create target dir
+    target_folder
 
-    #CHECK IF DIR VAR HAVE SPACEBAR IN STRING
-    if [ "$dir" != "${dir% *}" ] ; 
-    then
-        dir="${dir// /_}" ;
-    else
-        echo ""
-    fi
+    space_left_dir
     
-    #Make diroctory on USB accessible for all
-    mkdir_on_usb="$( echo $usb_media/$dir   )"
-    mkdir   $mkdir_on_usb
-    #chown   777 $mkdir_on_usb
-    #Measure space left on USB
-    space_left="$( df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}')"
-    sleep 0.5
-    if [ $language == "polish" ] ;
-        then
-            echo -e "NA DYSKU USB POZOSTALO: ${RED} $space_left ${NC}"
-        else
-            echo -e "THE AMOUNT OF FREE SPACE ON THE DISK: ${RED} $space_left ${NC}"
-    fi
+    # Set quality
+    set_mp3_quality
+    #Reade path to file with list
 
-    sleep 0.5
-	echo ""
+    echo -e "${YELLOW}${u}$(translate 1_info)${NC}"
 
-    #Choose quality
-    sleep 0.5
-	echo ""
+    yt-dlp "${ytdlp_err[@]}" \
+        -f best \
+        -ciw \
+        --extract-audio \
+        --audio-format mp3 \
+        --audio-quality $quality_mp3 \
+        -o  $mkdir_on_usb/"%(title)s.%(ext)s" \
+        -v "$channel_id"
 
-    if [ $language == "polish" ] ;
-        then
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-    fi
-
-    while [ $quality_mp3 != "128K" ] && [ $quality_mp3 != "320K" ];
-    do
-        if [ $language == "polish" ] ;
-        then
-            echo "WPROWADZ POPRAWNA WARTOSC 128K LUB 320K"
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            echo "THE CORRECT VALUE IS: 128K OR 320K"
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-        fi
-    done
-
-    echo ""
-     if [ $language == "polish" ] ;
-        then
-            echo -e " ${PURPLE} MP3 SA ZACHOWANE POD: $mkdir_on_usb  ${NC} "
-        else
-            echo -e " ${PURPLE} MP3 file is saved under: $mkdir_on_usb  ${NC} "
-    fi
-
-    echo ""
-
-    xdg-open $mkdir_on_usb
-    yt-dlp -f best -ciw --extract-audio --audio-format mp3 --audio-quality $quality_mp3 -o  $mkdir_on_usb/"%(title)s.%(ext)s" -v "$channel_id"
+    setsid xdg-open $mkdir_on_usb >/dev/null 2>&1 &
 }
 
 download_movie(){
-    touch /tmp/site_mov.txt
+    # Create target dir
+    target_folder
 
-    #Set directory for downloaded file
-    if [ $language == "polish" ] ;
-        then
-            read -p "PODAJ NAZWE FOLDERU W KTORYM MA/MAJA BYC ZACHOWANY FILM/FILMY: " dir
-        else
-            read -p "ENTER THE NAME OF THE FOLDER IN WHICH THE VIDEO/VIDEOS SHOULD BE SAVED: " dir
-    fi
-    
-    #CHECK IF DIR VAR HAVE SPACEBAR IN STRING
-    if [ "$dir" != "${dir% *}" ] ; 
-    then
-        dir="${dir// /_}" ;
-    else
-        echo ""
-    fi
-    
-    #Make diroctory on USB accessible for all
-    mkdir_on_usb="$( echo $usb_media/$dir   )"
-    mkdir   $mkdir_on_usb
-    #chown   777 $mkdir_on_usb
-    #Measure space left on USB
-    space_left="$( df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}')"
+    # Create list with urls
+    touch /tmp/site.txt
+    set_single_link
+
+    mapfile -t mov_list < /tmp/site.txt
+    rm /tmp/site.txt
+
+    space_left_dir
+
+    # Set quality
+    set_mp3_quality
+
+    # Main download loop
+    echo -e "${YELLOW}${u}$(translate 1_info)${NC}"
+
     sleep 0.5
-    if [ $language == "polish" ] ;
-        then
-            echo -e "NA DYSKU USB POZOSTALO: ${RED} $space_left ${NC}"
-        else
-            echo -e "THE AMOUNT OF FREE SPACE ON THE DISK: ${RED} $space_left ${NC}"
-    fi
-
-    echo ""
-      if [ $language == "polish" ] ;
-        then
-            while [ 1 ];
-                do
-	                mov_list=$( cat /tmp/site_mov.txt)
-                    read -p "PODAJ CALY ADRES URL FILMU I ZATWIERDZ PRZEZ ENTER. ABY PRZERWAC WPISZ q I WCISNIJ ENTER: " mov
-                        if [ "$mov" == "q" ];
-                            then
-                                rm   /tmp/site_mov.txt
-                            break;
-                        else
-	                        echo "$mov" >> /tmp/site_mov.txt
-                        fi
-            done
-        else
-            while [ 1 ];
-                do
-	                mov_list=$( cat /tmp/site_mov.txt)
-                    read -p "ENTER THE ENTIRE VIDEO URL AND CONFIRM WITH ENTER. TO INTERRUPT, ENTER q AND HIT ENTER: " mov
-                        if [ "$mov" == "q" ];
-                            then
-                                rm   /tmp/site_mov.txt
-                            break;
-                        else
-	                        echo "$mov" >> /tmp/site_mov.txt
-                        fi
-                done
-        fi
-
-        sleep 0.5
-	    echo ""
-        xdg-open $mkdir_on_usb
-        for site_mov in ${mov_list[@]}
-         do
-          yt-dlp --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --merge-output-format mp4 --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$site_mov" 
+	echo ""
+        
+    for site_mov in ${mov_list[@]}
+        do
+          yt-dlp "${ytdlp_err[@]}" \
+            -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best \
+            --merge-output-format mp4 \
+            --output $mkdir_on_usb/"%(title)s.%(ext)s"  \
+            "$site_mov" 
         done
-
+    setsid xdg-open $mkdir_on_usb >/dev/null 2>&1 &
 }
 
 download_movie_and_music_from_file(){
+    # Create target dir
+    target_folder
 
-#Create var with mounting USB mounting points
-    echo ""
-	sleep 0.5
-    #Set directory for downloaded files
-    if [ $language == "polish" ] ;
-        then
-            read -p "PODAJ NAZWE FOLDERU W KTORYM MA/MAJA BYC ZACHOWANE FILM/FILMY WRAZ ZE SCIEZKA/SCIEZKAMI DZWIEKOWA/DZWIEKOWYMI: " dir
-        else
-            read -p "ENTER THE NAME OF THE FOLDER TO WHICH THE VIDEO/VIDEOS AND SEPARATED SOUNDTRACK/SOUNDTRACK SHOULD BE DOWNLOADED: " dir
-    fi
+    space_left_dir
     
-    #CHECK IF DIR VAR HAVE SPACEBAR IN STRING
-    if [ "$dir" != "${dir% *}" ] ; 
-    then
-        dir="${dir// /_}" ;
-    else
-        echo ""
-    fi
-    
-    mkdir_on_usb="$( echo $usb_media/$dir   )"
-    #Make diroctory on USB accessible for all
-	mkdir $mkdir_on_usb
-    #chown -R  777 $mkdir_on_usb
-    #Measure space left on USB
-	space_left="$( df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}')"
-	sleep 0.5
-	echo ""
-
-	if [ $language == "polish" ] ;
-        then
-            echo -e "NA DYSKU USB POZOSTALO: ${RED} $space_left ${NC}"
-        else
-            echo -e "THE AMOUNT OF FREE SPACE ON THE DISK: ${RED} $space_left ${NC}"
-    fi
-
-    #Choose quality
-    sleep 0.5
-
-	echo ""
-     if [ $language == "polish" ] ;
-        then
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-    fi
-
-    while [ $quality_mp3 != "128K" ] && [ $quality_mp3 != "320K" ];
-    do
-        if [ $language == "polish" ] ;
-        then
-            echo "WPROWADZ POPRAWNA WARTOSC 128K LUB 320K"
-            read -p "W JAKIEJ JAKOSCI CHCESZ ZACIAGNAC MP3: 128K lub 320K ? WPISZ POPRAWNA WARTOSC: " quality_mp3
-        else
-            echo "THE CORRECT VALUE IS: 128K OR 320K"
-            read -p "IN WHICH QUALITY SHOULD BE THE MP3 FILES DOWNLOADED: 128K or 320K? ENTER THE CORRECT VALUE: " quality_mp3
-        fi
-    done
-
+    # Set quality
+    set_mp3_quality
     #Reade path to file with list
-     if [ $language == "polish" ] ;
-        then
-            read -p "PRZECIAGNIJ I UPUSC PLIK Z LISTA DO TERMINALU: " plik_1
-        else
-            read -p "DRAG AND DROP THE FILE WITH LIST TO TERMINAL: " plik_1
-    fi
-    plik_string=$( echo  $plik_1 |  sed 's/"//g' |  sed s/\'//g )
     sleep 0.5
-    xdg-open $mkdir_on_usb
+	echo ""
+
+    read -p "$(translate 1_drag_drop) " file_1
+
+    file_path=$( echo  $file_1 |  sed 's/"//g' |  sed s/\'//g )
+    sleep 0.5
+    
+    echo -e "${YELLOW}${u}$(translate 1_info)${NC}"
     #Main download loop
-    for s in $( cat $plik_string )  ;
+    sleep 0.5
+    
+    #Main download loop
+    for s in $( cat $file_path )  ;
     do
-        yt-dlp --ignore-errors --format bestaudio --extract-audio --audio-format mp3 --audio-quality $quality_mp3 --output $mkdir_on_usb/"%(title)s.%(ext)s" "$s"
-        yt-dlp --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --merge-output-format mp4 --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
+        yt-dlp "${ytdlp_err[@]}" \
+            --format bestaudio \
+            --extract-audio \
+            -audio-format mp3 \
+            --audio-quality $quality_mp3 \
+            --output $mkdir_on_usb/"%(title)s.%(ext)s" \
+            "$s"
+
+        yt-dlp "${ytdlp_err[@]}" \
+            -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best \
+            --merge-output-format mp4 \
+            --output $mkdir_on_usb/"%(title)s.%(ext)s" \
+            "$s"
 
     done
-
-
+    setsid xdg-open $mkdir_on_usb >/dev/null 2>&1 &
 }
 
 download_movie_from_file(){
 
-#Create var with mounting USB mounting points
-    echo ""
-	sleep 0.5
-    #Set directory for downloaded files
-     if [ $language == "polish" ] ;
-        then
-            read -p "PODAJ NAZWE FOLDERU W KTORYM MAJA BYC ZACHOWANE FILMY Z LISTY:  " dir
-        else
-            read -p "ENTER THE NAME OF THE FOLDER IN WHICH THE VIDEOS FROM THE LIST WILL BE SAVED:  " dir
-    fi
-    
-    #CHECK IF DIR VAR HAVE SPACEBAR IN STRING
-    if [ "$dir" != "${dir% *}" ] ; 
-    then
-        dir="${dir// /_}" ;
-    else
-        echo ""
-    fi
-    
-    mkdir_on_usb="$( echo $usb_media/$dir   )"
-    #Make diroctory on USB accessible for all
-	mkdir $mkdir_on_usb
-    #chown -R  777 $mkdir_on_usb
-    #Measure space left on USB
-	space_left="$( df -PH "$mkdir_on_usb" | tail -1 | awk '{print $4}')"
-	sleep 0.5
-	echo ""
+# Create target dir
+    target_folder
 
-	if [ $language == "polish" ] ;
-        then
-            echo -e "NA DYSKU USB POZOSTALO: ${RED} $space_left ${NC}"
-        else
-            echo -e "THE AMOUNT OF FREE SPACE ON THE DISK: ${RED} $space_left ${NC}"
-    fi
-
+    space_left_dir
+    
+    # Set quality
     #Reade path to file with list
     sleep 0.5
 	echo ""
-    if [ $language == "polish" ] ;
-        then
-            read -p "PRZECIAGNIJ I UPUSC PLIK Z LISTA DO TERMINALU: " plik_1
-        else
-            read -p "DRAG AND DROP THE FILE WITH LIST TO TERMINAL: " plik_1
-    fi
-    plik_string=$( echo  $plik_1 |  sed 's/"//g' |  sed s/\'//g )
+
+    read -p "$(translate 1_drag_drop) " file_1
+
+    file_path=$( echo  $file_1 |  sed 's/"//g' |  sed s/\'//g )
     sleep 0.5
-    xdg-open $mkdir_on_usb
+    
+    echo -e "${YELLOW}${u}$(translate 1_info)${NC}"
     #Main download loop
-    for s in $( cat $plik_string )  ;
+    sleep 0.5
+    
+    #Main download loop
+    for s in $( cat $file_path )  ;
     do
-     yt-dlp --ignore-errors -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best --merge-output-format mp4 --output $mkdir_on_usb/"%(title)s.%(ext)s"  "$s"
-
+     yt-dlp "${ytdlp_err[@]}" \
+        -f bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best \
+        --merge-output-format mp4 \
+        --output $mkdir_on_usb/"%(title)s.%(ext)s"  \
+        "$s"
     done
-
-
+    xdg-open $mkdir_on_usb
 }
 
 upgrade_yt-dlp(){
@@ -699,182 +681,83 @@ install_tor(){
 
 wpis_bash(){
 
-    if [ $language == "polish" ] ;
-        then
-            read -p "PRZECIAGNIJ I UPUSC SKRYPT/PLIK ZAWIERAJACY POBIERAKA DO TERMINALA: " plik
-        else
-            read -p "DRAG AND DROP SCRIPT/FILE CONTAINING THE POBIERAK INTO THE TERMINAL: " plik
+    read -p "$(translate 1_drag_drop_bash)" plik
+
+    plik_zr=$( echo  $plik |  sed 's/"//g' |  sed s/\'//g )
+    skrypt=$( ls /home/$user_comp/ | grep "SKRYPTY" )
+    dest=$(echo "/home/"$user_comp"/SKRYPTY/pobierak.sh")
+    if [ -z "$skrypt" ]
+	    then
+      	    mkdir /home/$user_comp/SKRYPTY
+	    else
+            echo ""
     fi
 
-plik_zr=$( echo  $plik |  sed 's/"//g' |  sed s/\'//g )
-skrypt=$( ls /home/$user_comp/ | grep "SKRYPTY" )
-dest=$(echo "/home/"$user_comp"/SKRYPTY/pobierak.sh")
-if [ -z "$skrypt" ]
-	then
-      	 mkdir /home/$user_comp/SKRYPTY
-	else
-         echo ""
-fi
-
-cp $plik_zr $dest
-sudo sed -i.bak '/pobierak/d' ~/.bashrc
-sudo echo "alias pobierak='/home/$user_comp/SKRYPTY/pobierak.sh'" >> ~/.bashrc
-chmod +x "/home/$user_comp/SKRYPTY/pobierak.sh"
-    if [ $language == "polish" ] ;
-        then
-            echo -e "OD TERAZ MOZESZ UZYC KOMENDY ${RED}${u}pobierak${NC} BASH BEZPOSREDIO W TERMINALU"
-        else
-            echo -e "NOW YOU CAN USE THE COMMAND ${RED}${u}pobierak${NC} BASH DIRECTLY IN THE TERMINAL"
-    fi
-
-sleep 5
-exec bash
+    cp $plik_zr $dest
+    sudo sed -i.bak '/pobierak/d' ~/.bashrc
+    sudo echo "alias pobierak='/home/$user_comp/SKRYPTY/pobierak.sh'" >> ~/.bashrc
+    chmod +x "/home/$user_comp/SKRYPTY/pobierak.sh"
+    echo -e "$(translate 1_write_bash)${RED}${u}pobierak${NC} $(translate 2_write_bash)"
+    sleep 5
+    exec bash
 exit
 }
 
-about(){
-if [ $language == "polish" ] ;
-        then
-            clear
-            echo -e "${YELLOW}"
-            cat << "EOF" >&2
-
-                                                ++++---->    POBIERAK    <----++++
-
-    PROGRAM BAZUJE NA PROJEKCIE YOUTUBE-DLP [ https://github.com/yt-dlp/yt-dlp ] KONTYNUACJA YOUTUBE-DL.
-    ZAWIERA ZBIOR KOMEND ORAZ FUKCJI UPROSZCZAJACYCH I AUTOMATYZUJACYCH PROCES SCIAGANIA FILMOW I MUZYKI Z YT.
-    TEN SKRYPT TO NAKLADKA (WRAPPER) TERMINALOWY Z JUZ PRZYGOTOWANYMI POLAMI WYBOROW.
-    
-                                            DO PRAWIDLOWEGO DZIALANIA SKRYPTU NIEZBEDNE SA:
-
-        -   yt-dlp              GLOWNY PROGRAM
-        -   python-is-python3   OBSLUGA JEZYKA PYTHON W KTORYM NAPISANY JEST YT-DLP
-        -   ffmpeg              BIBLIOTEKI DO KONWERTOWANIA SCIAGNIETYCH PLIKOW
-
-    ZARAZ NA POCZATKU SKRYPT SPRAWDZA CZY ZAMONTOWANY JEST NOSNIK USB ORAZ CZY UZYTKOWNIK MA NA NIM PRAWA ZAPISU
-    JESLI WSZYSTKO JEST WPORZADKU, MIEJSCEM DOCELOWYM DLA SCIAGANIA PLIKOW JEST DYSK ZEWNETRZNY W PRZECIWNYM WYPADKU FOLDER DOMOWY UZYTKOWNIKA
-    
-    DZEIKI MC ZA MOTYWACJE DO NAPISANIA TEGO SKRYPTU, POZA JEGO PRAKTYCZNOSCIA IDZIE ROWNIEZ OSZCZEDNOSC KASY ;)    POZDRO 600
-
-EOF
-
-        else
-            clear
-            echo -e "${YELLOW}"
-            cat << "EOF" >&2
-                                                ++++---->    POBIERAK    <----++++
-            THE PROGRAM IS BASED ON THE YOUTUBE-DLP PROJECT [https://github.com/yt-dlp/yt-dlp] CONTINUED BY YOUTUBE-DL.
-       CONTAINS A SET OF COMMANDS AND FUNCTIONS TO SIMPLIFY AND AUTOMATE THE PROCESS OF DOWNLOADING FILMS AND MUSIC FROM YT.
-                        THIS SCRIPT IS A TERMINAL WRAPPER WITH ALREADY PREPARED SELECTION FIELDS.
-
-                                         FOR THE PROPER OPERATION OF THE SCRIPT, NECESSARY ARE:
-        
-        -   yt-dlp              MAIN PROGRAM
-        -   python-is-python3   HANDLING PYTHON IN WHICH IS WRITTEN YT-DLP
-        -   ffmpeg              LIBRARIES FOR CONVERTING DOWNLOADED FILES
-
-    IMMEDIATELY AT THE BEGINNING, THE SCRIPT CHECKS IF THERE IS A USB STORAGE ATTACHED AND IF THE USER HAS WRITE RIGHTS ON IT
-            IF EVERYTHING IS OK, DESTINATION FOR THE DOWNLOADED FILES IS EXTERNAL UDB DRIVE, OTHERWISE USER'S HOME FOLDER
-
-        THANKS MC FOR THE MOTIVATION TO WRITE THIS SCRIPT, BEYOND ITS PRACTICALITY, THERE IS ALSO SAVING MONEY;) POZDRO 600
-EOF
-        fi
-
-}
 
 ###############################
 #7.        PRINT MENU         #
 ###############################
 u='\e[4m'
 
-printMenu_EN(){
+printMenu_MULTI(){
 	clear && printf '\e[3J'
+    check_internet_connection
+    check_yt_dlp_version
+    echo "$(translate 1_if_latest) ${LOCAL_VERSION:-brak}"
+    echo "$(translate 2_if_latest) ${LOCAL_PATH:-brak}"
+    echo "$(translate 3_if_latest) $LATEST_VERSION"
 	echo ""
 	usb_check
 	echo ""
-    echo -e "${normal} ${u} $Pobierak_ver ${NC}"
+    echo -e "${normal} ${u}$(translate pob_version): $Pobierak_ver${NC}"
 	echo ""
-	echo -e	"${PURPLE}  \t1)      DOWNLOAD AS MUCH AS YOU WANT SINGLE LINKS ${NC}"
+	echo -e	"${PURPLE}  \t1)	$(translate 1_opt) ${NC}"
     echo ""
-    echo -e "${BLUE}    \t2)	DOWNLOAD SONGS FROM LINKS IN THE FILE ${NC}"
+    echo -e "${BLUE}    \t2)	$(translate 2_opt) ${NC}"
 	echo ""
-	echo -e	"${PURPLE}  \t3)	DOWNLOAD THE WHOLE PLAYLIST ${NC}"
+	echo -e	"${PURPLE}  \t3)	$(translate 3_opt) ${NC}"
 	echo ""
-	echo -e "${BLUE}    \t4)	DOWNLOAD WHOLE CHANNEL ${NC}"
+	echo -e "${BLUE}    \t4)	$(translate 4_opt) ${NC}"
 	echo ""
-	echo -e "${PURPLE}  \t5)	DOWNLOAD MOVIE ${NC}"
+	echo -e "${PURPLE}  \t5)	$(translate 5_opt)  ${NC}"
     echo ""
-    echo -e "${BLUE}    \t6)	DOWNLOAD VIDEOS OR MUSIC VIDEOS FROM LIST ${NC}"
+    echo -e "${BLUE}    \t6)	$(translate 6_opt) ${NC}"
 	echo ""
-    echo -e "${PURPLE}  \t7)	DOWNLOAD THE FILM AND SEPARATE MP3 TRACK ${NC}"
+    echo -e "${PURPLE}  \t7)	$(translate 7_opt) ${NC}"
     echo ""
-	echo -e "${CYAN}    \t8)	---> YOUTUBE-DLP INSTALLATION <--- ${NC}"
+	echo -e "${CYAN}    \t8)	$(translate 8_opt) <--- ${NC}"
 	echo ""
-	echo -e "${CYAN}    \t9)	UPGRADE LIBRARIES TO CONVERT AND YOUTUBE-DLP ${NC}"
+	echo -e "${CYAN}    \t9)	$(translate 9_opt) ${NC}"
 	echo ""
-    echo -e "${CYAN}    \t10)     INSTALL "POBIERAKA" IN THE CONSOLE (~./bashrc entry)  ${NC}"
+    echo -e "${CYAN}    \t10)   $(translate 10_opt)  ${NC}"
     echo ""
-    echo -e "${CYAN}    \t11)	INSTALL TOR AND DELUGE ${NC}"
+    echo -e "${CYAN}    \t11)	$(translate 11_opt) ${NC}"
 	echo ""
-	echo -e "   \t12)   EXIT"
+	echo -e "   \t12)   $(translate 12_opt)"
     echo ""
-    echo -e "${PURPLE}  \t13)   ABOUT ${NC}"
+    echo -e "${PURPLE}  \t13)   $(translate 13_opt) ${NC}"
     echo ""
+    echo -e "${PURPLE}  \t14)   $(translate 14_opt): ${YELLOW}$err_state ${NC}"
+	echo ""
+    echo -e "${PURPLE}  \t15)   $(translate 15_opt)${NC}"
+	read -r -p "$(translate 20_option)" option;
 
-	echo ""
-	read option;
+	while ! [[ "$option" =~ ^([1-9]|1[0-5])$ ]]; do
+        echo "Invalid option. Choose number from 1 to 15."
+        read -r -p "$(translate 20_option) " option
+    done
 
-	while [[ $option -gt 13 || ! $(echo $option ) ]] # | grep '^[1-9]$') ]]
-	do
-		printMenu_EN
-
-	done
-	runOption
-}
-
-printMenu_PL(){
-	clear && printf '\e[3J'
-	echo ""
-	usb_check
-	echo ""
-    echo -e "${normal} ${u} $Pobierak_ver ${NC}"
-	echo ""
-	echo -e	"${PURPLE}  \t1)      SCIAGNIJ ILE CHCESZ POJEDYNCZYCH LINKOW ${NC}"
-    echo ""
-    echo -e "${BLUE}    \t2)	SCIAGNIJ PIOSENKI Z LINKOW ZNAJDUJACYCH SIE W PLIKU ${NC}"
-	echo ""
-	echo -e	"${PURPLE}  \t3)	SCIAGNIJ CALA PLAYLISTE ${NC}"
-	echo ""
-	echo -e "${BLUE}    \t4)	SCIAGNIJ CALY KANAL ${NC}"
-	echo ""
-	echo -e "${PURPLE}  \t5)	SCIAGNIJ FILM ${NC}"
-    echo ""
-    echo -e "${BLUE}    \t6)	SCIAGNIJ FILMY LUB TELEDYSKI Z LISTY ${NC}"
-	echo ""
-    echo -e "${PURPLE}  \t7)	SCIAGNIJ FILM & SCIEZKE MP3 ${NC}"
-    echo ""
-	echo -e "${CYAN}    \t8)	---> INSTALACJA YOUTUBE-DLP <--- ${NC}"
-	echo ""
-	echo -e "${CYAN}    \t9)	UPGRADE BIBLIOTEK DO KONWERTOWANIA ORAZ YOUTUBE-DLP${NC}"
-	echo ""
-    echo -e "${CYAN}    \t10)     INSTALUJ POBIERAKA W KONSOLI  ${NC}"
-    echo ""
-    echo -e "${CYAN}    \t11)	INSTALL TOR AND DELUGE ${NC}"
-	echo ""
-	echo -e "   \t12)   EXIT"
-    echo ""
-    echo -e "${PURPLE}  \t13)   ABOUT ${NC}"
-    echo ""
-
-	echo ""
-	read option;
-
-	while [[ $option -gt 13 || ! $(echo $option ) ]] # | grep '^[1-9]$') ]]
-	do
-        printMenu_PL
-
-	done
-	runOption
+    runOption
 }
 #############################
 #8.	RUN OPTION	    #
@@ -894,24 +777,16 @@ runOption(){
     11) install_tor;;
 	12) exit;;
     13) about;;
-
+    14) ERROR_LVL;;
+    15) set_default_language;;
+	*)
+		echo "Invalid option."
+		;;
 	esac
-	echo "Press any Key to continue"
-	read x
-	if [ $language == "polish" ] ;
-        then
-            printMenu_PL
-        else
-            printMenu_EN
-    fi
-            
+	echo "Press any key to continue"
+	read -r x         
 }
-while true ;
-do
-	if [ $language == "polish" ] ;
-        then
-            printMenu_PL
-        else
-            printMenu_EN
-    fi
+while true; do
+        printMenu_MULTI
 done
+
